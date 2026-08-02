@@ -1,0 +1,12 @@
+/ {
+	fragment@0 {
+		target-path = "/";
+		__overlay__ {
+			helloworld0: helloworld@0 {
+				compatible = "acme,helloworld";
+				status = "okay";
+				reg = <0x0>;
+			};
+		};
+	};
+};

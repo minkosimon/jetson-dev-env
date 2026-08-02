@@ -1,0 +1,7 @@
+/dts-v1/;
+/plugin/;
+#include "helloworld-fragment.dtsi"
+
+/ {
+	compatible = "@BOARD_COMPATIBLE@";   /* injecté par le Makefile depuis configs/*.mk */
+};
