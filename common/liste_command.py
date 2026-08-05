@@ -1,16 +1,21 @@
 """Central command registry.
 
-This module builds one Command manager, registers project commands,
-and exposes helper functions to execute them.
+Builds one Command registry and registers every project-level command:
+Python functions, bash commands/scripts, and remote (SSH) commands/scripts.
+All commands run through the same Command API: run(), run_async(), run_line().
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from threading import Thread
 from typing import Any
+import sys
 
-from common.command.command import AsyncHandle, Command
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+	sys.path.insert(0, str(REPO_ROOT))
+
+from common.command.command import Command
 from common.common_function import (
 	download_jetpack,
 	get_config_jetpack,
@@ -18,9 +23,9 @@ from common.common_function import (
 	list_available_jetpack_versions,
 	load_and_validate_jetpack_definition,
 )
+SCRIPTS_DIR = REPO_ROOT / "scripts"
 
-
-# Explicit registry: one key associated to one Python command function.
+# Python functions available by key.
 PYTHON_COMMANDS: dict[str, Any] = {
 	"download_jetpack": download_jetpack,
 	"get_list_jetpack": get_list_jetpack,
@@ -30,106 +35,49 @@ PYTHON_COMMANDS: dict[str, Any] = {
 }
 
 
-def create_command_manager(workdir: str | Path | None = None, env: dict[str, str] | None = None) -> Command:
-	"""Create a Command manager and register all default project commands."""
-	manager = Command(workdir=workdir, env=env)
+def build_registry(workdir: str | Path | None = None, env: dict[str, str] | None = None) -> Command:
+	"""Create a Command registry with every project-level command registered."""
+	registry = Command(workdir=workdir if workdir is not None else REPO_ROOT, env=env)
 
-	# Register python commands from the explicit key->function dictionary.
 	for key, func in PYTHON_COMMANDS.items():
-		manager.register(key, func)
+		registry.register(key, func)
 
-	# Bridges to command execution types handled by Command itself.
-	manager.register("bash", lambda command, sync=True, key="bash": manager.run_bash(command, sync=sync, key=key))
-	manager.register(
-		"script",
-		lambda script_path, script_args=None, sync=True, key="script": manager.run_script(
-			script_path=script_path,
-			script_args=script_args,
-			sync=sync,
-			key=key,
-		),
-	)
-	manager.register(
-		"remote",
-		lambda target_ip, remote_command, target_user="nvidia", sync=True, key="remote": manager.run_remote(
-			target_ip=target_ip,
-			remote_command=remote_command,
-			target_user=target_user,
-			sync=sync,
-			key=key,
-		),
+	registry.register_script("setup-build-env", SCRIPTS_DIR / "setup-build-env.sh")
+	registry.register_bash(
+		"setup-env",
+		f"source '{SCRIPTS_DIR / 'env-jetpack.sh'}' '{{0}}' "
+		"&& env | grep -E '^(JETPACK_VERSION|KERNEL_SRC|CROSS_COMPILE|ARCH)='",
 	)
 
-	return manager
+	return registry
 
 
-COMMAND_MANAGER = create_command_manager()
+# Shared registry used across the project.
+COMMANDS = build_registry()
 
 
-# Full command dictionary used by execute_command for key routing.
-COMMAND_FUNCTIONS: dict[str, Any] = {
-	**PYTHON_COMMANDS,
-	"bash": lambda *args, **kwargs: COMMAND_MANAGER.run_bash(*args, **kwargs),
-	"script": lambda *args, **kwargs: COMMAND_MANAGER.run_script(*args, **kwargs),
-	"remote": lambda *args, **kwargs: COMMAND_MANAGER.run_remote(*args, **kwargs),
-}
+def _example_main() -> None:
+	"""Run lightweight examples to illustrate the project command registry."""
+	print("=== Registered command keys ===")
+	print(COMMANDS.keys())
+
+	print("\n=== Example: run a python command ===")
+	versions = COMMANDS.run("list_available_jetpack_versions", board="jetson-orin-nano")
+	print(f"Available jetpack versions: {versions}")
+
+	print("\n=== Example: same call via run_line ===")
+	versions_via_line = COMMANDS.run_line("list_available_jetpack_versions --board jetson-orin-nano")
+	print(f"Available jetpack versions: {versions_via_line}")
+
+	print("\n=== Example: unknown key handling ===")
+	try:
+		COMMANDS.run("unknown_command")
+	except KeyError as exc:
+		print(f"Expected error: {exc}")
 
 
-def execute_command(command_key: str, *args: Any, async_mode: bool = False, **kwargs: Any) -> Any | Thread:
-	"""Execute a registered command by key.
-
-	Set async_mode=True to run Python callable commands in background threads.
-	"""
-	if command_key not in COMMAND_FUNCTIONS:
-		raise KeyError(f"Unknown command key: {command_key}")
-
-	if async_mode:
-		return COMMAND_MANAGER.run_async(command_key, *args, **kwargs)
-	return COMMAND_MANAGER.run(command_key, *args, **kwargs)
+__all__ = ["Command", "COMMANDS", "PYTHON_COMMANDS", "build_registry", "REPO_ROOT", "SCRIPTS_DIR"]
 
 
-def execute_bash(command: str, sync: bool = True, key: str = "bash") -> int | AsyncHandle:
-	"""Convenience wrapper for local bash commands."""
-	return COMMAND_MANAGER.run_bash(command=command, sync=sync, key=key)
-
-
-def execute_script(
-	script_path: str | Path,
-	script_args: list[str] | None = None,
-	sync: bool = True,
-	key: str = "script",
-) -> int | AsyncHandle:
-	"""Convenience wrapper for bash script execution."""
-	return COMMAND_MANAGER.run_script(
-		script_path=script_path,
-		script_args=script_args,
-		sync=sync,
-		key=key,
-	)
-
-
-def execute_remote(
-	target_ip: str,
-	remote_command: str,
-	target_user: str = "nvidia",
-	sync: bool = True,
-	key: str = "remote",
-) -> int | AsyncHandle:
-	"""Convenience wrapper for remote SSH execution."""
-	return COMMAND_MANAGER.run_remote(
-		target_ip=target_ip,
-		remote_command=remote_command,
-		target_user=target_user,
-		sync=sync,
-		key=key,
-	)
-
-
-__all__ = [
-	"COMMAND_MANAGER",
-	"create_command_manager",
-	"execute_command",
-	"execute_bash",
-	"execute_script",
-	"execute_remote",
-]
+if __name__ == "__main__":
+	_example_main()

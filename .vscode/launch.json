@@ -38,6 +38,21 @@
             "cwd": "${workspaceFolder}",
             "python": "${workspaceFolder}/.venv/bin/python",
             "console": "integratedTerminal"
+        },
+        {
+            "name": "Python: run_command --board jetson-orin-nano --download jetpack-7.2",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/run_command",
+            "args": [
+                "--board",
+                "jetson-orin-nano",
+                "--download",
+                "jetpack-7.2"
+            ],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}/.venv/bin/python",
+            "console": "integratedTerminal"
         }
     ]
 }

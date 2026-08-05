@@ -2,29 +2,16 @@
 
 from __future__ import annotations
 
-import hashlib
+from asyncio import sleep
 import os
-import shutil
 from pathlib import Path
 from runpy import run_path
 from typing import Any, Dict
-import requests
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
 from common.config_env import PROJECT_DIRS
-import patoolib
+from common.command.dowload_file import FileDownloader
 import importlib.util
 from common.mbda_icon import MBDA_ICON
-from common.logger import (
-	configure_logger,
-	get_logger,
-	log_debug,
-	log_error,
-	log_fatal,
-	log_info,
-	log_ok,
-	log_warning,
-)
+from common.logger import log_fatal, log_warning
 ###########################################################################################################
 #  Le fichier config_env.py definit l'ensemble des chemins de base pour le projet et les sous-repertoires.
 # l'avantage d'exporter ces variables dans les variables d'environnement de l'OS est que les scripts shell 
@@ -61,37 +48,53 @@ def load_variable_from_python_file(fichier, nom_variable):
 		raise RuntimeError(f"Failed to load variable '{nom_variable}' from file '{fichier}': {e}")
 
 
-def download_file_from_url(url: str, destination: str | Path):
-	"""Download a file from URL to destination with optional SHA256 check."""
-	target_path = Path(destination)
-	
-	try:
-		if not target_path.exists():
-			raise Exception(
-				f"Le dossier {target_path} n'existe pas. veuillez creer le repertoire download a la racine du projet."
-			)
+def download_file_from_url(url: str, destination: str | Path) -> Path:
+	"""Telecharge un fichier depuis une URL, avec barre de progression.
 
-		response = requests.get(url, stream=True)
-		response.raise_for_status()
+	Si le fichier de destination existe deja, le telechargement est ignore.
 
-		with target_path.open("wb") as fichier:
-			for bloc in response.iter_content(chunk_size=8192):
-				fichier.write(bloc)
+	Args:
+		url: URL du fichier a telecharger (http/https).
+		destination: Soit un dossier (le nom du fichier est deduit de l'URL),
+			soit un chemin de fichier complet. Le dossier parent est cree
+			automatiquement s'il n'existe pas encore.
 
-		log_ok(f"Téléchargement terminé : {url} -> {target_path}")
-		return target_path
-
-	except requests.RequestException as e:
-		raise Exception(f"Erreur pendant le téléchargement : {e} du fichier {url} vers {target_path}")
-	
-
-def extract_tar_file(tar_file_path: str | Path, destination_dir: str | Path):
+	Returns:
+		Le chemin du fichier telecharge (ou deja present).
 	"""
-	Extrait une archive dans le dossier indique.
+	target_path = Path(destination)
+
+	if target_path.is_dir():
+		download_dir, filename = target_path, Path(url.split("?", 1)[0]).name
+	else:
+		download_dir, filename = target_path.parent, target_path.name
+
+	if not filename:
+		raise ValueError(f"Impossible de deduire le nom de fichier depuis l'URL: {url}")
+
+	target_file = download_dir / filename
+	if target_file.exists():
+		log_warning(f"Le fichier {target_file.name} est deja telecharge, telechargement ignore.")
+		return target_file
+
+	return FileDownloader(download_dir=download_dir).download(url, filename=filename)
+
+
+def extract_tar_file(tar_file_path: str | Path, destination_dir: str | Path, name: str | None = None) -> Path:
+	"""
+	Extrait une archive dans le dossier indique, avec barre de progression.
+
+	Delegue l'extraction a `FileDownloader.extract`, qui affiche une barre de
+	progression (par fichier pour les archives tar/zip, indeterminee pour les
+	autres formats geres par patoolib).
 
 	Args:
 		tar_file_path: Chemin de l'archive.
 		destination_dir: Dossier de destination.
+		name: Nom de repertoire (ou fichier) donne a l'extraction. Si fourni,
+			l'archive est extraite dans `destination_dir / name` au lieu de
+			directement dans `destination_dir`. Par defaut (None), le contenu
+			de l'archive est extrait directement dans `destination_dir`.
 
 	Returns:
 		Le chemin du dossier de destination.
@@ -104,18 +107,36 @@ def extract_tar_file(tar_file_path: str | Path, destination_dir: str | Path):
 	if not os.path.isfile(tar_file_path):
 		raise FileNotFoundError(f"Archive introuvable : {tar_file_path}")
 
-	os.makedirs(destination_dir, exist_ok=True)
+	destination_dir = Path(destination_dir)
+	if name:
+		destination_dir = destination_dir / name
 
 	try:
-		patoolib.extract_archive(
-			tar_file_path,
-			outdir=destination_dir,
-			verbosity=-1
-		)
+		return FileDownloader(download_dir=destination_dir).extract(tar_file_path, destination_dir)
 	except Exception as e:
 		raise RuntimeError(f"Erreur lors de l'extraction : {e}") from e
 
-	log_ok(f"Extraction terminée : {tar_file_path} -> {destination_dir}")
+
+def extract_tar_file_allow_absolute_symlinks(
+	tar_file_path: str | Path,
+	destination_dir: str | Path,
+	name: str | None = None,
+) -> Path:
+	"""Extrait une archive tar en autorisant les liens absolus (cas rootfs NVIDIA)."""
+	if not os.path.isfile(tar_file_path):
+		raise FileNotFoundError(f"Archive introuvable : {tar_file_path}")
+
+	destination_dir = Path(destination_dir)
+	if name:
+		destination_dir = destination_dir / name
+
+	try:
+		return FileDownloader(download_dir=destination_dir).extract_tar_allow_absolute_symlinks(
+			tar_file_path,
+			destination_dir,
+		)
+	except Exception as e:
+		raise RuntimeError(f"Erreur lors de l'extraction : {e}") from e
 
 
 def getEnvVariable(nameVar: str = "") -> str:
@@ -180,8 +201,9 @@ def get_config_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") ->
 	"""Get the JetPack configuration for a specific version and board."""
 
 	list_config_jetpack = get_list_jetpack(board)
+	config_filename = f"{_normalize_version(version_jetpack)}.py"
 
-	if f"jetpack-{version_jetpack}" not in list_config_jetpack:
+	if config_filename not in list_config_jetpack:
 		raise RuntimeError(f"JetPack version {version_jetpack} not found for board {board}.")
 
 	#/!\ : on verifie que le fichier de configuration existe, sinon on leve une exception pour informer l'utilisateur
@@ -198,23 +220,49 @@ def download_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") -> N
 	config = get_config_jetpack(version_jetpack, board)
 
 	# Download each required file from the configuration
-	for key in config:
+	for key, value in config.items():
 		if "url" not in key:
 			continue  # Skip keys that are not URLs
-		
-		url = config.get(key)
-		if url:
-			filename = url.split("/")[-1]
-			destination = Path(PROJECT_DIRS["download"]) / filename
-			try:
-				download_file_from_url(url, destination)
-			except Exception as e:
-				log_fatal(f"Failed to download {key} from {url}: {e}")
-				os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+
+		if not value:
+			log_fatal(f"No URL provided for {key} in JetPack configuration for version '{version_jetpack}' and board '{board}'.")
+			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+
+		if isinstance(value, dict):
+			# Format {"nom_lisible": "url"}, ex: {"Linux_for_Tegra": "https://..."}
+			name, url = next(iter(value.items()))
+		else:
+			name, url = key, value
+
+		filename = url.split("/")[-1]
+		destination = Path(PROJECT_DIRS["download"]) / board / version_jetpack / filename
+		try:
+			downloaded_file = download_file_from_url(url, destination)
+		except Exception as e:
+			log_fatal(f"Failed to download {key} from {url}: {e}")
+			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+
+		try:
+			#extract the downloaded file to the output directory
+			# bases name board/version_jetpack
+			extract_destination = Path(PROJECT_DIRS["output"]) / board / version_jetpack
+			if key == "jetapack_url_sample_rootfs":
+				extract_tar_file_allow_absolute_symlinks(downloaded_file, extract_destination, name=name)
+			else:
+				extract_tar_file(downloaded_file, extract_destination, name=name)
+
+		except Exception as e:
+			log_fatal(f"Failed to extract {downloaded_file} to {PROJECT_DIRS['output']}: {e}")
+			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+				
 def _normalize_version(version: str) -> str:
 	normalized = version.strip()
 	if normalized.startswith("jetpack-"):
 		return normalized
+	if normalized.startswith("jetpack."):
+		normalized = normalized.removeprefix("jetpack.")
+	elif normalized.startswith("jetpack"):
+		normalized = normalized.removeprefix("jetpack").lstrip("-._ ")
 	return f"jetpack-{normalized}"
 
 
@@ -234,7 +282,7 @@ def jetpack_config_dir(board: str = "jetson-orin-nano") -> Path:
 
 
 def jetpack_config_path(version: str, board: str = "jetson-orin-nano") -> Path:
-	return jetpack_config_dir(board) / _normalize_version(version)
+	return jetpack_config_dir(board) / f"{_normalize_version(version)}.py"
 
 
 def list_available_jetpack_versions(board: str = "jetson-orin-nano") -> list[str]:
@@ -244,7 +292,7 @@ def list_available_jetpack_versions(board: str = "jetson-orin-nano") -> list[str
 	versions: list[str] = []
 	for path in sorted(config_dir.iterdir()):
 		if path.is_file() and path.name.startswith("jetpack-"):
-			versions.append(path.name.removeprefix("jetpack-"))
+			versions.append(path.stem.removeprefix("jetpack-"))
 	return versions
 
 
@@ -292,69 +340,6 @@ def load_and_validate_jetpack_definition(version: str, board: str = "jetson-orin
 	return definition
 
 
-def ensure_parent_dir(path: str | Path) -> Path:
-	"""Ensure the destination parent directory exists and return Path."""
-	destination = Path(path)
-	destination.parent.mkdir(parents=True, exist_ok=True)
-	return destination
-
-
-def compute_sha256(file_path: str | Path, chunk_size: int = 1024 * 1024) -> str:
-	"""Compute SHA256 digest for a local file."""
-	hash_obj = hashlib.sha256()
-	with Path(file_path).open("rb") as stream:
-		for chunk in iter(lambda: stream.read(chunk_size), b""):
-			hash_obj.update(chunk)
-	return hash_obj.hexdigest()
-
-
-def download_file(
-	url: str,
-	destination: str | Path,
-	*,
-	timeout: int = 120,
-	overwrite: bool = False,
-	user_agent: str = "jetson-dev-env/1.0",
-	expected_sha256: str | None = None,
-) -> Path:
-	"""Download a file from URL to destination with optional SHA256 check."""
-	if not url.startswith(("http://", "https://")):
-		raise ValueError(f"URL invalide: {url}")
-
-	target_path = ensure_parent_dir(destination)
-	if target_path.exists() and not overwrite:
-		if expected_sha256:
-			current = compute_sha256(target_path)
-			if current.lower() != expected_sha256.lower():
-				raise ValueError(
-					f"Le fichier existe mais le SHA256 ne correspond pas pour {target_path}."
-				)
-		return target_path
-
-	request = Request(url, headers={"User-Agent": user_agent})
-	temp_path = target_path.with_suffix(target_path.suffix + ".part")
-
-	try:
-		with urlopen(request, timeout=timeout) as response, temp_path.open("wb") as output:
-			shutil.copyfileobj(response, output)
-	except HTTPError as exc:
-		raise RuntimeError(f"Erreur HTTP pendant le telechargement ({exc.code}): {url}") from exc
-	except URLError as exc:
-		raise RuntimeError(f"Erreur reseau pendant le telechargement: {url}") from exc
-
-	temp_path.replace(target_path)
-
-	if expected_sha256:
-		digest = compute_sha256(target_path)
-		if digest.lower() != expected_sha256.lower():
-			target_path.unlink(missing_ok=True)
-			raise ValueError(
-				f"SHA256 invalide pour {target_path}. attendu={expected_sha256} obtenu={digest}"
-			)
-
-	return target_path
-
-
 __all__ = [
 	"REQUIRED_JETPACK_URL_KEYS",
 	"get_list_jetpack",
@@ -364,7 +349,5 @@ __all__ = [
 	"load_jetpack_definition",
 	"validate_jetpack_definition",
 	"load_and_validate_jetpack_definition",
-	"ensure_parent_dir",
-	"compute_sha256",
-	"download_file",
+	"download_file_from_url",
 ]

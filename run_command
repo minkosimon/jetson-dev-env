@@ -1,131 +1,77 @@
 #!/usr/bin/env python3
-"""Unified launcher for Python, Bash, and remote board commands.
+"""Command launcher for board-related workflows.
 
-Examples:
-  ./run_command --board jetson-orin-nano python download_jetpack --version 7.2
-  ./run_command --board jetson-orin-nano bash setup-build-env --version 7.2
-  ./run_command --board jetson-orin-nano bash setup-env --version 7.2
-  ./run_command --board jetson-orin-nano remote --target-ip 192.168.1.10 --cmd "uname -a"
+Usage examples:
+  ./run_command --board jetson-orin-nano --download 7.2
+  ./run_command --board jetson-orin-nano --display-conf 7.2
+  ./run_command --board jetson-orin-nano --list-jetpack-available
 """
 
-from __future__ import annotations
+from common.mbda_icon import MBDA_ICON
+from common.common_function import is_valid_board, getEnvVariable, log_fatal
+from common.liste_command import COMMANDS
 
 import argparse
 import os
-import subprocess
 import sys
 from pathlib import Path
-
-from common.common_function import download_jetpack, getEnvVariable, is_valid_board
 from common.config_env import export_to_environ
-from common.logger import log_error, log_fatal, log_info
-from common.mbda_icon import MBDA_ICON
 
 
 REPO_ROOT = Path(__file__).resolve().parent
-SCRIPTS_DIR = REPO_ROOT / "scripts"
-
-
-def _run_subprocess(command: list[str], env: dict[str, str]) -> None:
-	print("$ " + " ".join(command))
-	subprocess.run(command, cwd=str(REPO_ROOT), env=env, check=True)
-
-
-def _build_parser() -> argparse.ArgumentParser:
-	parser = argparse.ArgumentParser(
-		prog="run_command",
-		description="Launch Python, Bash, and remote commands for a board.",
-	)
-	parser.add_argument("--board", required=True, help="Board name (example: jetson-orin-nano).")
-
-	subparsers = parser.add_subparsers(dest="command_type", required=True)
-
-	python_parser = subparsers.add_parser("python", help="Run a Python action.")
-	python_parser.add_argument("action", choices=["download_jetpack"], help="Python action name.")
-	python_parser.add_argument("--version", required=True, help="JetPack version (example: 7.2).")
-
-	bash_parser = subparsers.add_parser("bash", help="Run a local Bash workflow.")
-	bash_parser.add_argument("action", choices=["setup-build-env", "setup-env"], help="Bash action name.")
-	bash_parser.add_argument("--version", required=True, help="JetPack version (example: 7.2).")
-
-	remote_parser = subparsers.add_parser("remote", help="Run a command on a remote target over SSH.")
-	remote_parser.add_argument("--target-ip", required=True, help="Target board IP address.")
-	remote_parser.add_argument("--target-user", default="nvidia", help="SSH username (default: nvidia).")
-	remote_parser.add_argument("--cmd", required=True, help="Command to run on remote target.")
-
-	return parser
-
-
-def _dispatch_python(args: argparse.Namespace) -> int:
-	if args.action == "download_jetpack":
-		download_jetpack(version_jetpack=args.version, board=args.board)
-		log_info(f"download_jetpack completed for board={args.board}, version={args.version}")
-		return 0
-
-	log_error(f"Unsupported python action: {args.action}")
-	return 2
-
-
-def _dispatch_bash(args: argparse.Namespace, env: dict[str, str]) -> int:
-	if args.action == "setup-build-env":
-		script = SCRIPTS_DIR / "setup-build-env.sh"
-		if not script.is_file():
-			raise FileNotFoundError(f"Missing script: {script}")
-		_run_subprocess(["bash", str(script), args.version], env)
-		return 0
-
-	if args.action == "setup-env":
-		script = SCRIPTS_DIR / "env-jetpack.sh"
-		if not script.is_file():
-			raise FileNotFoundError(f"Missing script: {script}")
-		print(f"To apply environment in your current shell, run:\nsource {script} {args.version}")
-		_run_subprocess(
-			[
-				"bash",
-				"-lc",
-				f"source '{script}' '{args.version}' && env | grep -E '^(JETPACK_VERSION|KERNEL_SRC|CROSS_COMPILE|ARCH)='",
-			],
-			env,
-		)
-		return 0
-
-	log_error(f"Unsupported bash action: {args.action}")
-	return 2
-
-
-def _dispatch_remote(args: argparse.Namespace, env: dict[str, str]) -> int:
-	target = f"{args.target_user}@{args.target_ip}"
-	_run_subprocess(["ssh", target, args.cmd], env)
-	return 0
 
 
 def main(argv: list[str] | None = None) -> int:
+	# Export project environment variables before parsing commands.
 	export_to_environ(overwrite=True)
-	parser = _build_parser()
+
+	parser = argparse.ArgumentParser(
+		prog="run_command",
+		description="Launch project commands with mandatory board selection.",
+	)
+	# board argument is required to specify the target board for the command execution.
+	parser.add_argument("--board", required=True, help="Board name (example: jetson-orin-nano).")
+
+	# option parsers for download, display-conf and list-jetpack-available actions.
+	parser.add_argument("--download", dest="download_version", help="JetPack version to download (example: 7.2).")
+	parser.add_argument("--display-conf", dest="display_conf_version", help="JetPack version whose configuration should be displayed (example: 7.2).")
+	parser.add_argument(
+		"--list-jetpack-available",
+		dest="list_jetpack_available",
+		action="store_true",
+		help="List the JetPack versions available for the selected board.",
+	)
 	args = parser.parse_args(argv)
 
+	# Validate the board argument and prepare the environment for command execution.
 	if not is_valid_board(args.board):
-		log_fatal(
-			f"Unknown board '{args.board}'. Expected folder: {getEnvVariable('PROJECT_DIR_BOARDS')}/{args.board}"
-		)
-		return 2
+		log_fatal(f"Error: Unknown board '{args.board}'. check if name of board folder is correct: {getEnvVariable('PROJECT_DIR_BOARDS')}/{args.board}")
+		os._exit(1)
 
-	env = os.environ.copy()
-	env["BOARD"] = args.board
+	if args.download_version is None and args.display_conf_version is None and not args.list_jetpack_available:
+		log_fatal("At least one action is required: --download, --display-conf or --list-jetpack-available")
+		os._exit(1)
 
 	try:
-		if args.command_type == "python":
-			return _dispatch_python(args)
-		if args.command_type == "bash":
-			return _dispatch_bash(args, env)
-		if args.command_type == "remote":
-			return _dispatch_remote(args, env)
+		if args.download_version:
+			COMMANDS.run("download_jetpack", args.download_version, board=args.board)
 
-		log_error(f"Unsupported command type: {args.command_type}")
-		return 2
-	except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError, ValueError) as exc:
-		log_error(f"Command failed: {exc}")
+		if args.display_conf_version:
+			config = COMMANDS.run("get_config_jetpack", args.display_conf_version, board=args.board)
+			print(f"Configuration JetPack {args.display_conf_version} pour {args.board} :")
+			for key, value in config.items():
+				print(f"  {key}: {value}")
+
+		if args.list_jetpack_available:
+			versions = COMMANDS.run("list_available_jetpack_versions", board=args.board)
+			print(f"Versions JetPack disponibles pour {args.board} :")
+			for version in versions:
+				print(f"  - {version}")
+	except Exception as exc:
+		print(f"Command failed: {exc}", file=sys.stderr)
 		return 1
+
+	return 0
 
 
 if __name__ == "__main__":

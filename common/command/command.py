@@ -1,11 +1,12 @@
 """Command execution utilities.
 
 This module provides a Command class that:
-- registers callable commands with string keys
+- registers callable commands (Python functions, bash commands/scripts,
+  remote commands/scripts) under string keys
 - runs commands synchronously or asynchronously
-- executes local bash commands
-- executes bash scripts
-- executes remote commands over SSH
+- executes local bash commands and scripts
+- executes remote commands and scripts over SSH
+- runs a registered command from a single command-line style string
 """
 
 from __future__ import annotations
@@ -15,11 +16,14 @@ from pathlib import Path
 from threading import Thread
 from typing import Any, Callable
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
 
 
+# Make sure "common.logger" can be imported even when this file is run directly
+# (e.g. `python command.py`), not just when imported as part of the package.
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
 	sys.path.insert(0, str(REPO_ROOT))
@@ -70,6 +74,67 @@ class Command:
 			del self._registry[key]
 			log_debug(f"Command unregistered: {key}")
 
+	def register_bash(self, key: str, command: str) -> None:
+		"""Register a local bash command template under a key.
+
+		Extra positional args passed to run()/run_line() fill in '{0}', '{1}', ...
+		placeholders in the command template.
+		"""
+
+		# The closure below captures `command` and `key` from this call, so each
+		# registered key gets its own runner remembering its own template.
+		def _runner(*extra_args: str, sync: bool = True, run_key: str = key) -> int | AsyncHandle:
+			final_command = self._fill_template(command, extra_args)
+			return self.run_bash(final_command, sync=sync, key=run_key)
+
+		self.register(key, _runner)
+
+	def register_script(self, key: str, script_path: str | Path, script_args: list[str] | None = None) -> None:
+		"""Register a local bash script under a key.
+
+		Extra positional args passed to run()/run_line() are appended after script_args.
+		"""
+		base_args = list(script_args) if script_args else []
+
+		def _runner(*extra_args: str, sync: bool = True, run_key: str = key) -> int | AsyncHandle:
+			return self.run_script(script_path, script_args=[*base_args, *extra_args], sync=sync, key=run_key)
+
+		self.register(key, _runner)
+
+	def register_remote(self, key: str, target_ip: str, remote_command: str, target_user: str = "nvidia") -> None:
+		"""Register a remote (SSH) command template under a key.
+
+		Extra positional args passed to run()/run_line() fill in '{0}', '{1}', ...
+		placeholders in the command template.
+		"""
+
+		def _runner(*extra_args: str, sync: bool = True, run_key: str = key) -> int | AsyncHandle:
+			final_command = self._fill_template(remote_command, extra_args)
+			return self.run_remote(target_ip, final_command, target_user=target_user, sync=sync, key=run_key)
+
+		self.register(key, _runner)
+
+	def register_remote_script(
+		self,
+		key: str,
+		target_ip: str,
+		script_path: str | Path,
+		target_user: str = "nvidia",
+	) -> None:
+		"""Register a local bash script to run on a remote target over SSH."""
+
+		def _runner(*extra_args: str, sync: bool = True, run_key: str = key) -> int | AsyncHandle:
+			return self.run_remote_script(
+				target_ip,
+				script_path,
+				script_args=list(extra_args),
+				target_user=target_user,
+				sync=sync,
+				key=run_key,
+			)
+
+		self.register(key, _runner)
+
 	def keys(self) -> list[str]:
 		"""Return sorted list of registered command keys."""
 		return sorted(self._registry.keys())
@@ -107,6 +172,54 @@ class Command:
 		thread.start()
 		return thread
 
+	def run_line(self, command_line: str, async_mode: bool = False) -> Any:
+		"""Run a registered command from a single command-line style string.
+
+		The first token is the command key; remaining tokens become positional
+		args, except '--name value' pairs which become kwargs (bare '--flag'
+		becomes kwargs['flag'] = True).
+
+		Example: run_line("download_jetpack --version_jetpack 7.2 --board jetson-orin-nano")
+		"""
+		tokens = shlex.split(command_line)
+		if not tokens:
+			raise ValueError("command_line cannot be empty.")
+
+		key, *raw_args = tokens
+		args, kwargs = self._parse_line_args(raw_args)
+		if async_mode:
+			return self.run_async(key, *args, **kwargs)
+		return self.run(key, *args, **kwargs)
+
+	@staticmethod
+	def _fill_template(template: str, extra_args: tuple[str, ...]) -> str:
+		"""Fill '{0}', '{1}', ... placeholders in a command template with extra args."""
+		return template.format(*extra_args) if extra_args else template
+
+	@staticmethod
+	def _parse_line_args(raw_args: list[str]) -> tuple[list[Any], dict[str, Any]]:
+		# Walk the tokens left to right: plain tokens become positional args,
+		# and every "--name" becomes a kwarg. If the token right after "--name"
+		# is itself not a flag, it's consumed as that kwarg's value; otherwise
+		# the flag is treated as a boolean switch (kwargs[name] = True).
+		args: list[Any] = []
+		kwargs: dict[str, Any] = {}
+		i = 0
+		while i < len(raw_args):
+			token = raw_args[i]
+			if token.startswith("--"):
+				name = token[2:].replace("-", "_")
+				if i + 1 < len(raw_args) and not raw_args[i + 1].startswith("--"):
+					kwargs[name] = raw_args[i + 1]
+					i += 2
+				else:
+					kwargs[name] = True
+					i += 1
+			else:
+				args.append(token)
+				i += 1
+		return args, kwargs
+
 	def run_bash(self, command: str, sync: bool = True, key: str = "bash") -> int | AsyncHandle:
 		"""Execute a local bash command."""
 		if not command.strip():
@@ -137,11 +250,7 @@ class Command:
 			stdout=subprocess.PIPE,
 			stderr=subprocess.PIPE,
 		)
-		handle = AsyncHandle(key=key, process=process)
-		handle.stdout_thread = self._start_stream_thread(process.stdout, "info")
-		handle.stderr_thread = self._start_stream_thread(process.stderr, "error")
-		self._async_handles[key] = handle
-		return handle
+		return self._wrap_async(process, key)
 
 	def run_script(
 		self,
@@ -175,9 +284,70 @@ class Command:
 		if not remote_command.strip():
 			raise ValueError("remote_command cannot be empty.")
 
+		# remote_command is embedded as-is inside double quotes, so it is interpreted
+		# by both the local shell (run_bash uses `bash -lc`) and the remote shell.
+		# This is intentional: it lets callers use shell features (&&, pipes, ...)
+		# in remote_command, but it means untrusted input here is a shell-injection risk.
 		ssh_target = f"{target_user}@{target_ip}"
 		command = f"ssh {ssh_target} \"{remote_command}\""
 		return self.run_bash(command, sync=sync, key=key)
+
+	def run_remote_script(
+		self,
+		target_ip: str,
+		script_path: str | Path,
+		script_args: list[str] | None = None,
+		target_user: str = "nvidia",
+		sync: bool = True,
+		key: str = "remote_script",
+	) -> int | AsyncHandle:
+		"""Execute a local bash script on a remote target over SSH.
+
+		The script content is streamed over stdin (`ssh ... bash -s -- args`),
+		so no copy step onto the remote target is needed.
+		"""
+		script = Path(script_path)
+		if not script.is_absolute():
+			script = self._workdir / script
+		if not script.is_file():
+			raise FileNotFoundError(f"Script not found: {script}")
+		if not target_ip.strip():
+			raise ValueError("target_ip cannot be empty.")
+
+		args = script_args if script_args else []
+		ssh_target = f"{target_user}@{target_ip}"
+		command = ["ssh", ssh_target, "bash -s", "--", *args]
+
+		if sync:
+			log_info(f"Run remote script (sync): {script} on {ssh_target}")
+			with script.open("r") as script_file:
+				completed = subprocess.run(
+					command,
+					cwd=str(self._workdir),
+					env=self._env,
+					stdin=script_file,
+					text=True,
+					capture_output=True,
+				)
+			self._log_process_output(completed.stdout, completed.stderr)
+			if completed.returncode != 0:
+				log_error(f"Remote script failed with code {completed.returncode}")
+			else:
+				log_info("Remote script completed")
+			return completed.returncode
+
+		log_info(f"Run remote script (async): {script} on {ssh_target}")
+		with script.open("r") as script_file:
+			process = subprocess.Popen(
+				command,
+				cwd=str(self._workdir),
+				env=self._env,
+				stdin=script_file,
+				text=True,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+			)
+		return self._wrap_async(process, key)
 
 	def poll_async(self, key: str) -> int | None:
 		"""Return process return code if finished, else None."""
@@ -204,7 +374,20 @@ class Command:
 			log_error(f"Async command '{key}' failed with code {code}")
 		return code
 
+	def _wrap_async(self, process: subprocess.Popen[str], key: str) -> AsyncHandle:
+		"""Start stdout/stderr readers for a background process and track it under `key`."""
+		handle = AsyncHandle(key=key, process=process)
+		handle.stdout_thread = self._start_stream_thread(process.stdout, "info")
+		handle.stderr_thread = self._start_stream_thread(process.stderr, "error")
+		self._async_handles[key] = handle
+		return handle
+
 	def _start_stream_thread(self, stream: Any, level: str) -> Thread | None:
+		"""Continuously read a process pipe line-by-line and forward it to the logger.
+
+		Runs in a daemon thread so it never blocks interpreter shutdown, even if
+		the underlying process is still running.
+		"""
 		if stream is None:
 			return None
 
@@ -236,6 +419,7 @@ class Command:
 
 __all__ = ["Command", "AsyncHandle", "CommandCallable"]
 
+
 ## Demo functions for testing the Command class
 
 def _demo_add(a: int, b: int) -> int:
@@ -258,6 +442,10 @@ def _run_demo() -> int:
 	log_info(f"add result = {result}")
 	thread = manager.run_async("echo", "hello from async callable")
 	thread.join(timeout=2)
+
+	# 1b) Register a bash command and run it via a single command-line string.
+	manager.register_bash("hello", "echo 'hello from registered bash'")
+	manager.run_line("hello")
 
 	# 2) Run local bash sync + async.
 	bash_rc = manager.run_bash("echo 'hello from sync bash'", sync=True, key="bash-sync")

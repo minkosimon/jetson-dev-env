@@ -8,7 +8,7 @@ JETPACK_DEFINITION = {
     "V4L2" : "1.22.1",
     "distro_version" : "L4T Ubuntu 24.04 ",
 	"jetpack_info_l4t_release": "R39.2 (06/02/2026)",
-	"jetpack_url_driver_package": "https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/release/Jetson_Linux_R39.2.0_aarch64.tbz2",
-	"jetapack_url_sample_rootfs": "https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/sources/ubuntu_noble-l4t_aarch64_src.tbz2",
-	"jetpack_url_toolchain": "https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.0/release/x-tools.tbz2"
+	"jetpack_url_driver_package": {"Linux_for_Tegra":"https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/release/Jetson_Linux_R39.2.0_aarch64.tbz2"},
+	"jetapack_url_sample_rootfs": {"Sample_rootfs":"https://developer.nvidia.com/downloads/embedded/L4T/r39_Release_v2.0/release/Tegra_Linux_Sample-Root-Filesystem_R39.2.0_aarch64.tbz2"},
+	"jetpack_url_toolchain": {"Toolchain":"https://developer.nvidia.com/downloads/embedded/L4T/r38_Release_v2.0/release/x-tools.tbz2"}
 }
