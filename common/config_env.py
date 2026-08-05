@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from common.logger import log_debug, log_info
 
 
 def _project_root() -> Path:
@@ -18,7 +19,12 @@ def _sanitize_key(path_key: str) -> str:
 
 
 PROJECT_ROOT_PATH = _project_root()
-PROJECT_ROOT = str(PROJECT_ROOT_PATH)
+PROJECT_DIR_ROOT = str(PROJECT_ROOT_PATH)
+
+# VARIABLE ENVIRONMENT, IMPORTANT: These are the default values for the project environment variables.
+PROJECT_ENV_STATUS_INIT = "NOT INITIALIZED"
+PROJECT_ENV_JETPACK_VALUE = "NONE"
+PROJECT_ENV_GCC_VALUE = "NONE"
 
 # Keep this list explicit and easy to read.
 PROJECT_DIRS = {
@@ -36,7 +42,7 @@ PROJECT_DIRS = {
 	"scripts": str(PROJECT_ROOT_PATH / "scripts"),
 }
 
-PROJECT_ENV_VARS = {"PROJECT_ROOT": PROJECT_ROOT}
+PROJECT_ENV_VARS = {"PROJECT_DIR_ROOT": PROJECT_DIR_ROOT}
 for rel_path, abs_path in PROJECT_DIRS.items():
 	if rel_path == ".":
 		continue
@@ -48,6 +54,18 @@ def export_to_environ(overwrite: bool = False) -> None:
 	for name, value in PROJECT_ENV_VARS.items():
 		if overwrite or name not in os.environ:
 			os.environ[name] = value
+			log_debug(f"Exported {name}={value} to environment variables.")
+
+	log_info("Project path variables exported to environment variables successfully.")
+			
+
+def unset_from_environ() -> None:
+	"""Remove all environment variables created by this module."""
+	for name in PROJECT_ENV_VARS:
+		os.environ.pop(name, None)
+		log_debug(f"Removed {name} from environment variables.")
+
+	log_info("Project path variables removed from environment variables successfully.")
 
 
 # Export by default when imported.
@@ -55,11 +73,12 @@ export_to_environ(overwrite=False)
 
 
 __all__ = [
-	"PROJECT_ROOT",
+	"PROJECT_DIR_ROOT",
 	"PROJECT_ROOT_PATH",
 	"PROJECT_DIRS",
 	"PROJECT_ENV_VARS",
 	"export_to_environ",
+	"unset_from_environ",
 ]
 
 

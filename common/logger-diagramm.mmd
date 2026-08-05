@@ -1,0 +1,57 @@
+---
+references:
+  - "File: /common/logger.py"
+generationTime: 2026-08-05T07:23:40.790Z
+---
+classDiagram
+    direction TB
+
+    class IntEnum
+
+    class LogLevel {
+        <<enumeration>>
+        +INFO
+        +WARNING
+        +ERROR
+    }
+
+    class Lock
+    class Path
+    class TextIO
+
+    class Logger {
+        -Lock _lock
+        -String _destination
+        -LogLevel _min_level
+        -TextIO _file_handle
+        -Path _file_path
+        +Logger(String destination, Path file_path, LogLevel min_level, boolean append)
+        +set_min_level(LogLevel level) void
+        +set_terminal() void
+        +set_file(Path file_path, boolean append) void
+        +close() void
+        +info(String message) void
+        +warning(String message) void
+        +error(String message) void
+        -_parse_level(String level) LogLevel
+        -_log(LogLevel level, String message) void
+        -_close_file_unlocked() void
+    }
+
+    class LoggerModule {
+        <<service>>
+        -Logger _default_logger$
+        +get_logger() Logger$
+        +configure_logger(String output, Path file_path, LogLevel min_level, boolean append) Logger$
+        +log_info(String message) void$
+        +log_warning(String message) void$
+        +log_error(String message) void$
+    }
+
+    LogLevel --|> IntEnum : inherits
+    Logger "1" --* "1" Lock : owns
+    Logger "1" --> "0..1" TextIO : writes_to
+    Logger "1" --> "0..1" Path : uses_file_path
+    Logger ..> LogLevel : filters_by
+    LoggerModule "1" --* "1" Logger : shared_instance
+    LoggerModule ..> LogLevel : configures_level
