@@ -377,7 +377,7 @@ class FileDownloader:
 		)
 
 		with Progress(*progress_columns) as progress:
-			task_id = progress.add_task("download", filename=target_name, total=total_size)
+			task_id = progress.add_task("download", filename=f"download in progress {target_name}", total=total_size)
 
 			with target_path.open("wb") as output_file:
 				for chunk in response.iter_content(chunk_size=self.chunk_size):

@@ -1,2 +1,6 @@
-/output/
-/workspace/
+/output/**
+/workspace/**
+download/**
+# Python cache
+**/__pycache__/
+**/*.py[cod]

@@ -8,7 +8,7 @@ from pathlib import Path
 from runpy import run_path
 from typing import Any, Dict
 from common.config_env import PROJECT_DIRS
-from common.command.dowload_file import FileDownloader
+from common.command.download_file import FileDownloader
 import importlib.util
 from common.mbda_icon import MBDA_ICON
 from common.logger import log_fatal, log_warning
