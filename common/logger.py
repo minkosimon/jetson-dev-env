@@ -246,6 +246,8 @@ def log_fatal(message: str) -> None:
 	"""Log an fatal message with the shared logger."""
 	_default_logger.fatal(message)
 	os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+
+
 #---------------------------------------------------------------------------------
 #                       Pour tester le logger, execute ce fichier directement.
 #                       Il generera un fichier de log dans le repertoire courant.

@@ -10,7 +10,7 @@ from typing import Any, Dict
 from common.config_env import PROJECT_DIRS
 from common.command.download_file import FileDownloader
 import importlib.util
-from common.mbda_icon import MBDA_ICON
+from common.mbda_icon import MBDA_ICON, print_status_icon
 from common.logger import log_fatal, log_warning
 ###########################################################################################################
 #  Le fichier config_env.py definit l'ensemble des chemins de base pour le projet et les sous-repertoires.
@@ -32,11 +32,9 @@ REQUIRED_JETPACK_URL_KEYS = (
 	"jetpack_url_toolchain"
 )
 
-
 def mbda_logo():
 	"""Return the MBDA logo as a string."""
 	print(MBDA_ICON)
-
 
 def load_variable_from_python_file(fichier, nom_variable):
 	try:

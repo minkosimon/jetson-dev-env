@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from common.logger import log_debug, log_info
+from common.mbda_icon import print_status_icons
 
 
 def _project_root() -> Path:
@@ -22,9 +23,9 @@ PROJECT_ROOT_PATH = _project_root()
 PROJECT_DIR_ROOT = str(PROJECT_ROOT_PATH)
 
 # VARIABLE ENVIRONMENT, IMPORTANT: These are the default values for the project environment variables.
-PROJECT_ENV_STATUS_INIT = "NOT INITIALIZED"
-PROJECT_ENV_JETPACK_VALUE = "NONE"
-PROJECT_ENV_GCC_VALUE = "NONE"
+PROJECT_ENV_JETSON_STATUS = "NOT_SET"
+PROJECT_ENV_JETPACK_VALUE = ""
+PROJECT_ENV_GCC_VALUE = ""
 
 # Keep this list explicit and easy to read.
 PROJECT_DIRS = {
@@ -56,7 +57,20 @@ def export_to_environ(overwrite: bool = False) -> None:
 			os.environ[name] = value
 			log_debug(f"Exported {name}={value} to environment variables.")
 
-	log_info("Project path variables exported to environment variables successfully.")
+	status_env_gcc = None
+	status_env_driver_linux = None
+	
+	if PROJECT_ENV_GCC_VALUE not in os.environ or PROJECT_ENV_GCC_VALUE == "":
+		status_env_gcc = "red"
+	elif PROJECT_ENV_GCC_VALUE in os.environ and PROJECT_ENV_GCC_VALUE != "":
+		status_env_gcc = "green"
+
+	if PROJECT_ENV_JETPACK_VALUE not in os.environ or PROJECT_ENV_JETPACK_VALUE == "":
+		status_env_driver_linux = "red"
+	elif PROJECT_ENV_JETPACK_VALUE in os.environ and PROJECT_ENV_JETPACK_VALUE != "":
+		status_env_driver_linux = "green"
+
+	print_status_icons(("linux", status_env_driver_linux), ("gcc", status_env_gcc))
 			
 
 def unset_from_environ() -> None:
