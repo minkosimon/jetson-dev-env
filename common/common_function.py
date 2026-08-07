@@ -252,6 +252,29 @@ def download_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") -> N
 		except Exception as e:
 			log_fatal(f"Failed to extract {downloaded_file} to {PROJECT_DIRS['output']}: {e}")
 			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+
+def setup_jetpack_environment(version_jetpack: str, board: str = "jetson-orin-nano") -> None:
+	"""Set up the environment variables for a specific JetPack version and board."""
+	config = get_config_jetpack(version_jetpack, board)
+
+	# Set environment variables based on the configuration
+	for key, value in config.items():
+		if "url" not in key:
+			continue  # Skip keys that are not URLs
+
+		if not value:
+			log_fatal(f"No URL provided for {key} in JetPack configuration for version '{version_jetpack}' and board '{board}'.")
+			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+
+		if isinstance(value, dict):
+			# Format {"nom_lisible": "url"}, ex: {"Linux_for_Tegra": "https://..."}
+			name, url = next(iter(value.items()))
+		else:
+			name, url = key, value
+
+		# Set environment variable for this component
+		env_var_name = f"JETPACK_{key.upper()}"
+		os.environ[env_var_name] = str(Path(PROJECT_DIRS["output"]) / board / version_jetpack / name)
 				
 def _normalize_version(version: str) -> str:
 	normalized = version.strip()

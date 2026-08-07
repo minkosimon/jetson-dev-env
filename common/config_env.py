@@ -6,6 +6,7 @@ This module exposes the main project directories as environment variables.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from common.logger import log_debug, log_info
 from common.mbda_icon import print_status_icons
