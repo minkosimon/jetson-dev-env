@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from asyncio import sleep
 import os
+import subprocess
 from pathlib import Path
 from runpy import run_path
 from typing import Any, Dict
+import common.config_env as config_env
 from common.config_env import PROJECT_DIRS
 from common.command.download_file import FileDownloader
 import importlib.util
-from common.mbda_icon import MBDA_ICON, print_status_icon
-from common.logger import log_fatal, log_warning
+from common.mbda_icon import MBDA_ICON, print_status_icons
+from common.logger import log_error, log_fatal, log_ok, log_warning
 ###########################################################################################################
 #  Le fichier config_env.py definit l'ensemble des chemins de base pour le projet et les sous-repertoires.
 # l'avantage d'exporter ces variables dans les variables d'environnement de l'OS est que les scripts shell 
@@ -212,6 +214,17 @@ def get_config_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") ->
 		os._exit(1)  # Exit the program with a non-zero status code to indicate an error
 
 
+def _resolve_jetpack_entry(key: str, value: str | dict) -> tuple[str, str]:
+	"""Retourne (nom_de_dossier, url) pour une entree de configuration JetPack.
+
+	Format attendu pour `value` : soit une URL (str) -> le nom de dossier est la
+	cle elle-meme, soit {"nom_dossier": "url"} (ex: {"Linux_for_Tegra": "https://..."}).
+	"""
+	if isinstance(value, dict):
+		return next(iter(value.items()))
+	return key, value
+
+
 def download_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") -> None:
 	"""Download the JetPack files for a specific version and board."""
 
@@ -226,11 +239,7 @@ def download_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") -> N
 			log_fatal(f"No URL provided for {key} in JetPack configuration for version '{version_jetpack}' and board '{board}'.")
 			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
 
-		if isinstance(value, dict):
-			# Format {"nom_lisible": "url"}, ex: {"Linux_for_Tegra": "https://..."}
-			name, url = next(iter(value.items()))
-		else:
-			name, url = key, value
+		name, url = _resolve_jetpack_entry(key, value)
 
 		filename = url.split("/")[-1]
 		destination = Path(PROJECT_DIRS["download"]) / board / version_jetpack / filename
@@ -253,29 +262,142 @@ def download_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") -> N
 			log_fatal(f"Failed to extract {downloaded_file} to {PROJECT_DIRS['output']}: {e}")
 			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
 
-def setup_jetpack_environment(version_jetpack: str, board: str = "jetson-orin-nano") -> None:
-	"""Set up the environment variables for a specific JetPack version and board."""
+
+def is_all_folders_available_for_jetson_env(version_jetpack: str, board: str = "jetson-orin-nano") -> bool:
+	"""Verifie que tous les dossiers requis (Toolchain, Linux_for_Tegra, Sample_rootfs, ...)
+	sont bien presents et non vides dans output/<board>/<version>/.
+
+	Erreur fatale (log_fatal quitte le programme) si un dossier requis est absent ou vide.
+	"""
 	config = get_config_jetpack(version_jetpack, board)
+	output_dir = Path(PROJECT_DIRS["output"]) / board / version_jetpack
 
-	# Set environment variables based on the configuration
+	missing = []
 	for key, value in config.items():
-		if "url" not in key:
-			continue  # Skip keys that are not URLs
+		if "url" not in key or not value:
+			continue
+		name, _ = _resolve_jetpack_entry(key, value)
+		folder = output_dir / name
+		if not folder.is_dir() or not any(folder.iterdir()):
+			missing.append(name)
 
-		if not value:
-			log_fatal(f"No URL provided for {key} in JetPack configuration for version '{version_jetpack}' and board '{board}'.")
-			os._exit(1)  # Exit the program with a non-zero status code to indicate an error
+	if missing:
+		log_fatal(f"Dossiers requis manquants dans {output_dir} : {', '.join(missing)}")
+		return False  # inatteignable (log_fatal quitte le programme), garde pour la lisibilite
 
-		if isinstance(value, dict):
-			# Format {"nom_lisible": "url"}, ex: {"Linux_for_Tegra": "https://..."}
-			name, url = next(iter(value.items()))
-		else:
-			name, url = key, value
+	log_ok(f"Tous les dossiers requis sont disponibles dans {output_dir}.")
+	return True
 
-		# Set environment variable for this component
-		env_var_name = f"JETPACK_{key.upper()}"
-		os.environ[env_var_name] = str(Path(PROJECT_DIRS["output"]) / board / version_jetpack / name)
-				
+
+def update_env_variable_jetpack(version_jetpack: str, board: str = "jetson-orin-nano") -> None:
+	"""Exporte les variables JETPACK_<COMPOSANT> (chemins des composants telecharges)
+	et reinitialise l'etat de compilation avant une nouvelle verification.
+	"""
+	config = get_config_jetpack(version_jetpack, board)
+	output_dir = Path(PROJECT_DIRS["output"]) / board / version_jetpack
+
+	for key, value in config.items():
+		if "url" not in key or not value:
+			continue
+		name, _ = _resolve_jetpack_entry(key, value)
+		os.environ[f"JETPACK_{key.upper()}"] = str(output_dir / name)
+
+	config_env.PROJECT_ENV_JETSON_STATUS = "DOWNLOADED"
+	config_env.PROJECT_ENV_JETPACK_VALUE = ""
+	config_env.PROJECT_ENV_GCC_VALUE = ""
+	os.environ["PROJECT_ENV_JETSON_STATUS"] = config_env.PROJECT_ENV_JETSON_STATUS
+
+	print_status_icons(("linux", "red"), ("gcc", "red"))
+
+
+def _compile_helloworld_app(cross_compile: str, app_output_dir: Path) -> bool:
+	"""Compile l'application de test helloworld avec le toolchain croise."""
+	app_dir = Path(PROJECT_DIRS["custom-application"]) / "helloworld"
+	try:
+		subprocess.run(
+			["make", "-C", str(app_dir), f"CROSS_COMPILE={cross_compile}", f"OUTPUT_DIR={app_output_dir}"],
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+	except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+		log_error(f"Echec de la compilation de l'application helloworld : {exc}")
+		return False
+
+	log_ok(f"Application helloworld compilee : {app_output_dir}/helloworld_app")
+	return True
+
+
+def _compile_helloworld_driver(cross_compile: str, kernel_src: Path, driver_output_dir: Path) -> bool:
+	"""Compile le module noyau de test helloworld avec le toolchain croise."""
+	if not (kernel_src / "Makefile").is_file():
+		log_error(f"Sources noyau introuvables pour la compilation du driver : {kernel_src}")
+		return False
+
+	driver_dir = Path(PROJECT_DIRS["custom-driver"]) / "helloworld"
+	try:
+		subprocess.run(
+			[
+				"make", "-C", str(driver_dir), "modules",
+				f"KERNEL_SRC={kernel_src}",
+				"ARCH=arm64",
+				f"CROSS_COMPILE={cross_compile}",
+				f"OUTPUT_DIR={driver_output_dir}",
+			],
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+	except (subprocess.CalledProcessError, FileNotFoundError) as exc:
+		log_error(f"Echec de la compilation du driver helloworld : {exc}")
+		return False
+
+	log_ok(f"Driver helloworld compile : {driver_output_dir}/helloworld_drv.ko")
+	return True
+
+
+def check_compilation_env(version_jetpack: str, board: str = "jetson-orin-nano") -> None:
+	"""Compile l'application et le driver helloworld avec le toolchain JetPack
+	telecharge, pour valider la chaine de compilation croisee. Met a jour la
+	couleur des icones gcc (application) et linux/driver (module noyau) selon
+	le resultat.
+	"""
+	config = get_config_jetpack(version_jetpack, board)
+	output_dir = Path(PROJECT_DIRS["output"]) / board / version_jetpack
+
+	toolchain_name, _ = _resolve_jetpack_entry("jetpack_url_toolchain", config["jetpack_url_toolchain"])
+	driver_pkg_name, _ = _resolve_jetpack_entry("jetpack_url_driver_package", config["jetpack_url_driver_package"])
+
+	cross_compile = output_dir / toolchain_name / "aarch64-none-linux-gnu" / "bin" / "aarch64-none-linux-gnu-"
+	kernel_src = output_dir / driver_pkg_name / "source" / "kernel"
+
+	app_ok = _compile_helloworld_app(str(cross_compile), output_dir / "app")
+	config_env.PROJECT_ENV_GCC_VALUE = str(cross_compile) if app_ok else ""
+
+	driver_ok = _compile_helloworld_driver(str(cross_compile), kernel_src, output_dir / "driver")
+	config_env.PROJECT_ENV_JETPACK_VALUE = version_jetpack if driver_ok else ""
+
+	config_env.PROJECT_ENV_JETSON_STATUS = "COMPILED" if (app_ok and driver_ok) else "COMPILE_FAILED"
+	os.environ["PROJECT_ENV_JETSON_STATUS"] = config_env.PROJECT_ENV_JETSON_STATUS
+
+	print_status_icons(
+		("linux", "green" if driver_ok else "red"),
+		("gcc", "green" if app_ok else "red"),
+	)
+
+
+def setup_jetpack_environment(version_jetpack: str, board: str = "jetson-orin-nano") -> None:
+	"""Pipeline complet de mise en place de l'environnement JetPack :
+	telecharge les composants, verifie que tous les dossiers requis sont
+	disponibles, met a jour les variables d'environnement, puis compile
+	l'application et le driver de test pour valider la chaine de compilation.
+	"""
+	download_jetpack(version_jetpack, board)
+	is_all_folders_available_for_jetson_env(version_jetpack, board)
+	update_env_variable_jetpack(version_jetpack, board)
+	check_compilation_env(version_jetpack, board)
+
+
 def _normalize_version(version: str) -> str:
 	normalized = version.strip()
 	if normalized.startswith("jetpack-"):
@@ -371,4 +493,9 @@ __all__ = [
 	"validate_jetpack_definition",
 	"load_and_validate_jetpack_definition",
 	"download_file_from_url",
+	"download_jetpack",
+	"is_all_folders_available_for_jetson_env",
+	"update_env_variable_jetpack",
+	"check_compilation_env",
+	"setup_jetpack_environment",
 ]

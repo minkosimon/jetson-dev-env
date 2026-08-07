@@ -2,7 +2,7 @@ CC         := $(CROSS_COMPILE)gcc
 OUTPUT_DIR ?= ../output/default/app
 BIN        := $(OUTPUT_DIR)/helloworld_app
 SRC        := src/helloworld_app.c
-CFLAGS     := -Wall -O2 -Iinclude -I../driver/include
+CFLAGS     := -Wall -O2 -Iinclude -I../../custom-driver/helloworld/include
 
 .PHONY: all host clean
 

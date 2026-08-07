@@ -5,6 +5,7 @@ Usage examples:
   ./run_command --board jetson-orin-nano --download 7.2
   ./run_command --board jetson-orin-nano --display-conf 7.2
   ./run_command --board jetson-orin-nano --list-jetpack-available
+  ./run_command --board jetson-orin-nano --setup-jetpack-env 7.2
 """
 
 from common.mbda_icon import MBDA_ICON
@@ -41,6 +42,11 @@ def main(argv: list[str] | None = None) -> int:
 		action="store_true",
 		help="List the JetPack versions available for the selected board.",
 	)
+	parser.add_argument(
+		"--setup-jetpack-env",
+		dest="setup_jetpack_env_version",
+		help="Download, verify and compile the JetPack environment for the given version (example: 7.2).",
+	)
 	args = parser.parse_args(argv)
 
 	# Validate the board argument and prepare the environment for command execution.
@@ -48,13 +54,21 @@ def main(argv: list[str] | None = None) -> int:
 		log_fatal(f"Error: Unknown board '{args.board}'. check if name of board folder is correct: {getEnvVariable('PROJECT_DIR_BOARDS')}/{args.board}")
 		os._exit(1)
 
-	if args.download_version is None and args.display_conf_version is None and not args.list_jetpack_available:
-		log_fatal("At least one action is required: --download, --display-conf or --list-jetpack-available")
+	if (
+		args.download_version is None
+		and args.display_conf_version is None
+		and not args.list_jetpack_available
+		and args.setup_jetpack_env_version is None
+	):
+		log_fatal("At least one action is required: --download, --display-conf, --list-jetpack-available or --setup-jetpack-env")
 		os._exit(1)
 
 	try:
 		if args.download_version:
 			COMMANDS.run("download_jetpack", args.download_version, board=args.board)
+
+		if args.setup_jetpack_env_version:
+			COMMANDS.run("setup_jetpack_environment", args.setup_jetpack_env_version, board=args.board)
 
 		if args.display_conf_version:
 			config = COMMANDS.run("get_config_jetpack", args.display_conf_version, board=args.board)
@@ -75,6 +89,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-	print(MBDA_ICON)
 	print("\n\nMBDA Jetson Development Environment - Command Launcher\n\n")
 	raise SystemExit(main())

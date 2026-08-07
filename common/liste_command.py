@@ -22,6 +22,7 @@ from common.common_function import (
 	get_list_jetpack,
 	list_available_jetpack_versions,
 	load_and_validate_jetpack_definition,
+	setup_jetpack_environment,
 )
 SCRIPTS_DIR = REPO_ROOT / "scripts"
 
@@ -32,6 +33,7 @@ PYTHON_COMMANDS: dict[str, Any] = {
 	"get_config_jetpack": get_config_jetpack,
 	"list_available_jetpack_versions": list_available_jetpack_versions,
 	"load_and_validate_jetpack_definition": load_and_validate_jetpack_definition,
+	"setup_jetpack_environment": setup_jetpack_environment,
 }
 
 

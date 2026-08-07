@@ -27,6 +27,7 @@ PROJECT_DIR_ROOT = str(PROJECT_ROOT_PATH)
 PROJECT_ENV_JETSON_STATUS = "NOT_SET"
 PROJECT_ENV_JETPACK_VALUE = ""
 PROJECT_ENV_GCC_VALUE = ""
+PROJECT_ENV_CURRENT_JETPACK = ""
 
 # Keep this list explicit and easy to read.
 PROJECT_DIRS = {
@@ -58,18 +59,8 @@ def export_to_environ(overwrite: bool = False) -> None:
 			os.environ[name] = value
 			log_debug(f"Exported {name}={value} to environment variables.")
 
-	status_env_gcc = None
-	status_env_driver_linux = None
-	
-	if PROJECT_ENV_GCC_VALUE not in os.environ or PROJECT_ENV_GCC_VALUE == "":
-		status_env_gcc = "red"
-	elif PROJECT_ENV_GCC_VALUE in os.environ and PROJECT_ENV_GCC_VALUE != "":
-		status_env_gcc = "green"
-
-	if PROJECT_ENV_JETPACK_VALUE not in os.environ or PROJECT_ENV_JETPACK_VALUE == "":
-		status_env_driver_linux = "red"
-	elif PROJECT_ENV_JETPACK_VALUE in os.environ and PROJECT_ENV_JETPACK_VALUE != "":
-		status_env_driver_linux = "green"
+	status_env_gcc = "green" if PROJECT_ENV_GCC_VALUE else "red"
+	status_env_driver_linux = "green" if PROJECT_ENV_JETPACK_VALUE else "red"
 
 	print_status_icons(("linux", status_env_driver_linux), ("gcc", status_env_gcc))
 			
